@@ -1,0 +1,14 @@
+# Core deep learning framework
+torch
+
+# For image processing and I/O
+opencv-python
+
+# For numerical operations
+numpy
+
+# For data augmentation
+albumentations
+
+# For splitting the dataset
+scikit-learn

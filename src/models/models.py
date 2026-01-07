@@ -51,7 +51,7 @@ class ModelSelection:
 
         print(f"\n模型总参数量: {total_params / 1e6:.2f} M")
         print(f"可训练参数量: {trainable_params / 1e6:.2f} M")
-        print(f"微调层参数量 (model.head): {sum(p.numel() for p in model.head.parameters()) / 1e6:.2f} M")
+#        print(f"微调层参数量 (model.head): {sum(p.numel() for p in model.head.parameters()) / 1e6:.2f} M")
         
         return model
 

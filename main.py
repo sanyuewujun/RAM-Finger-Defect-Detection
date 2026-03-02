@@ -8,7 +8,7 @@ MODE = 'train'
 
 # --- 模型配置 ---
 # 可选模型: 'resnet50','Vit_B_16'
-model_name = 'resnet50'
+model_name = 'Vit_B_16'
 
 # --- 数据集配置 ---
 IMAGE_SIZE = (224, 224)  # 图像尺寸(224,224): 'resnet50','Vit_B_16'
@@ -16,7 +16,7 @@ Aug = 0         # 是否启用数据增强 (1: 是, 0: 否)
 
 # --- 训练配置 ---
 # 仅在 MODE = 'train' 时生效
-num_epochs = 1         # 训练轮次
+num_epochs = 70         # 训练轮次
 batch_size = 16          # 批处理大小 (可根据显存调整)
 
 # --- 测试配置 ---

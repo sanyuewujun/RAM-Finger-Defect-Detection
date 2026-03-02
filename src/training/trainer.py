@@ -180,7 +180,11 @@ class TrainModel:
             self.best_val_acc = val_accuracy  # 记录最佳模型的验证准确率
             self.epochs_no_improve = 0
             # 保存最佳模型
-            torch.save(model.state_dict(), f"experiments/{self.model_name}/checkpoints/best_{self.model_name}_model.pth")
+            # 2. 检查并创建目录（核心修复）
+            save_dir = f"experiments/{self.model_name}/checkpoints"
+            if not os.path.exists(save_dir):
+                os.makedirs(save_dir, exist_ok=True)
+                torch.save(model.state_dict(), f"experiments/{self.model_name}/checkpoints/best_{self.model_name}_model.pth")
             print("验证损失降低，保存最佳模型。")
             return True
         return False

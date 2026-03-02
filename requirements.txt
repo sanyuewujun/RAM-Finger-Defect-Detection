@@ -12,3 +12,6 @@ albumentations
 
 # For splitting the dataset
 scikit-learn
+
+# 图形界面
+PyQt5

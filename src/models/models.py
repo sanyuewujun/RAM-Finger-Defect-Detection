@@ -2,6 +2,7 @@
 import torch
 import torch.nn as nn
 from torchvision.models import resnet50, ResNet50_Weights
+from torchvision.models import vit_b_16, ViT_B_16_Weights
 from src.data_loader.dataset import DataSet
 
 class ModelSelection:
@@ -79,7 +80,7 @@ class ModelSelection:
             nn.Dropout(0.4),
             
             # 输出层：连接到你的类别数
-            nn.Linear(768, num_classes)
+            nn.Linear(768, self.num_classes)
         )
 
         # 打印模型结构

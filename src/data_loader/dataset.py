@@ -3,6 +3,7 @@ from glob import glob
 import cv2
 import numpy as np
 import torch
+import matplotlib.pyplot as plt
 from torch.utils.data import TensorDataset, DataLoader
 import albumentations as A
 from albumentations.pytorch import ToTensorV2

@@ -15,7 +15,7 @@ from PyQt5.QtWidgets import (
     QTabWidget, QTextEdit
 )
 from PyQt5.QtGui import QPixmap, QFont, QColor, QIcon
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QDir
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QDir, QFileSystemWatcher
 from PyQt5.QtChart import QChart, QChartView, QPieSeries, QPieSlice
 from PyQt5.QtGui import QPainter, QColor as QtColor
 import shutil
@@ -116,6 +116,106 @@ class AutoInferenceWorker(QThread):
             self.error.emit(str(e))
 
 
+class ContinuousAutoInferenceWorker(QThread):
+    """持续自动推理并移动图片的工作线程"""
+    progress = pyqtSignal(int)
+    result_processed = pyqtSignal(dict)  # 每处理一张图片时发出信号
+    status_changed = pyqtSignal(str)
+    error = pyqtSignal(str)
+    
+    def __init__(self, inference_engine, inference_folder, ai_result_folder, scan_interval=2):
+        super().__init__()
+        self.inference_engine = inference_engine
+        self.inference_folder = Path(inference_folder)
+        self.ai_result_folder = Path(ai_result_folder)
+        self.scan_interval = scan_interval
+        self.running = True
+        self.processed_images = set()  # 已处理的图片集合
+        
+    def stop(self):
+        """停止持续扫描"""
+        self.running = False
+    
+    def run(self):
+        """持续扫描并推理"""
+        try:
+            image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.JPG', '.JPEG', '.PNG'}
+            
+            self.status_changed.emit(f"持续扫描已开启，监控文件夹: {self.inference_folder}")
+            
+            while self.running:
+                try:
+                    # 获取当前文件夹中的所有图片
+                    current_images = {
+                        p for p in self.inference_folder.iterdir() 
+                        if p.suffix in image_extensions and p.is_file()
+                    }
+                    
+                    # 找出新增的图片（未被处理过的）
+                    new_images = current_images - self.processed_images
+                    
+                    if new_images:
+                        self.status_changed.emit(f"发现 {len(new_images)} 张新图片，开始推理...")
+                        
+                        for image_path in sorted(new_images):
+                            if not self.running:
+                                break
+                                
+                            try:
+                                start_time = time.time()
+                                result = self.inference_engine.infer(str(image_path))
+                                elapsed = time.time() - start_time
+                                result['image_path'] = str(image_path)
+                                result['inference_time'] = elapsed
+                                result['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                                
+                                # 根据分类移动图片
+                                cls = result.get('class', 'NG')
+                                dest_dir = self.ai_result_folder / cls
+                                dest_dir.mkdir(exist_ok=True, parents=True)
+                                
+                                # 移动文件
+                                dest_path = dest_dir / image_path.name
+                                shutil.move(str(image_path), str(dest_path))
+                                
+                                # 标记为已处理
+                                self.processed_images.add(image_path)
+                                
+                                # 发出结果信号
+                                self.result_processed.emit(result)
+                                
+                                self.status_changed.emit(
+                                    f"已处理: {image_path.name} -> {cls} "
+                                    f"(置信度: {result.get('confidence', 0):.2%})"
+                                )
+                                
+                            except Exception as e:
+                                error_result = {
+                                    'image_path': str(image_path),
+                                    'error': str(e),
+                                    'class': '错误',
+                                    'confidence': 0,
+                                    'inference_time': 0,
+                                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                                }
+                                self.result_processed.emit(error_result)
+                                self.status_changed.emit(f"处理失败: {image_path.name} - {str(e)}")
+                    else:
+                        self.status_changed.emit(f"等待新图片... ({datetime.now().strftime('%H:%M:%S')})")
+                    
+                    # 等待指定的扫描间隔
+                    time.sleep(self.scan_interval)
+                    
+                except Exception as e:
+                    self.status_changed.emit(f"扫描错误: {str(e)}")
+                    time.sleep(self.scan_interval)
+            
+            self.status_changed.emit("持续扫描已停止")
+            
+        except Exception as e:
+            self.error.emit(f"持续扫描过程中出错: {str(e)}")
+
+
 class InferenceUI(QMainWindow):
     """推理UI主窗口"""
     
@@ -127,6 +227,11 @@ class InferenceUI(QMainWindow):
         self.inference_folder = Path("Inference")
         self.output_folder = Path("Inference/results")
         self.ai_result_folder = Path("AIResult")
+        
+        # 持续扫描相关
+        self.continuous_worker = None
+        self.is_scanning = False
+        self.scan_results = []  # 持续扫描的结果列表
         
         # 初始化结果管理器
         self.result_manager = ResultManager(str(self.output_folder))
@@ -257,6 +362,17 @@ class InferenceUI(QMainWindow):
         auto_infer_btn = QPushButton("自动推理并移动")
         auto_infer_btn.clicked.connect(self.auto_infer_and_move)
         left_layout.addWidget(auto_infer_btn)
+        
+        # 持续扫描按钮
+        self.continuous_scan_btn = QPushButton("开启持续扫描")
+        self.continuous_scan_btn.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
+        self.continuous_scan_btn.clicked.connect(self.toggle_continuous_scan)
+        left_layout.addWidget(self.continuous_scan_btn)
+        
+        # 持续扫描状态标签
+        self.scan_status_label = QLabel("扫描状态: 未启动")
+        self.scan_status_label.setStyleSheet("color: gray;")
+        left_layout.addWidget(self.scan_status_label)
         
         left_widget = QWidget()
         left_widget.setLayout(left_layout)
@@ -497,6 +613,114 @@ class InferenceUI(QMainWindow):
         self.worker.error.connect(lambda e: QMessageBox.critical(self, "错误", f"自动推理失败: {e}"))
         self.worker.start()
 
+    def toggle_continuous_scan(self):
+        """切换持续扫描状态"""
+        if self.inference_engine is None:
+            QMessageBox.warning(self, "警告", "请先初始化模型")
+            return
+        
+        if self.is_scanning:
+            # 停止扫描
+            self.stop_continuous_scan()
+        else:
+            # 开启扫描
+            self.start_continuous_scan()
+    
+    def start_continuous_scan(self):
+        """开启持续扫描"""
+        self.is_scanning = True
+        self.scan_results = []
+        
+        # 启动持续扫描线程
+        self.continuous_worker = ContinuousAutoInferenceWorker(
+            self.inference_engine, 
+            self.inference_folder,
+            self.ai_result_folder,
+            scan_interval=2  # 每2秒扫描一次
+        )
+        self.continuous_worker.result_processed.connect(self.on_continuous_result)
+        self.continuous_worker.status_changed.connect(self.on_scan_status_changed)
+        self.continuous_worker.error.connect(self.on_scan_error)
+        self.continuous_worker.start()
+        
+        # 更新按钮样式
+        self.continuous_scan_btn.setText("关闭持续扫描")
+        self.continuous_scan_btn.setStyleSheet("background-color: #f44336; color: white; font-weight: bold;")
+        
+        self.scan_status_label.setStyleSheet("color: green;")
+        self.scan_status_label.setText("扫描状态: 运行中...")
+    
+    def stop_continuous_scan(self):
+        """停止持续扫描"""
+        if self.continuous_worker is not None:
+            self.continuous_worker.stop()
+            self.continuous_worker.wait()  # 等待线程结束
+        
+        self.is_scanning = False
+        
+        # 更新按钮样式
+        self.continuous_scan_btn.setText("开启持续扫描")
+        self.continuous_scan_btn.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
+        
+        self.scan_status_label.setStyleSheet("color: gray;")
+        self.scan_status_label.setText("扫描状态: 已停止")
+        
+        # 弹出完成提示
+        if self.scan_results:
+            QMessageBox.information(
+                self, 
+                "持续扫描已停止", 
+                f"本次扫描共处理 {len(self.scan_results)} 张图片"
+            )
+    
+    def on_continuous_result(self, result):
+        """处理持续扫描的单个结果"""
+        self.scan_results.append(result)
+        
+        # 更新结果表格
+        row_count = self.result_table.rowCount()
+        self.result_table.insertRow(row_count)
+        
+        image_name = Path(result['image_path']).name
+        pred_class = result.get('class', '错误')
+        confidence = result.get('confidence', 0)
+        inference_time = result.get('inference_time', 0)
+        timestamp = result.get('timestamp', '')
+        
+        self.result_table.setItem(row_count, 0, QTableWidgetItem(image_name))
+        
+        class_item = QTableWidgetItem(pred_class)
+        if pred_class != '错误':
+            if pred_class == 'OK':
+                class_item.setBackground(QColor(144, 238, 144))  # 浅绿色
+            else:
+                class_item.setBackground(QColor(255, 182, 193))  # 浅红色
+        self.result_table.setItem(row_count, 1, class_item)
+        
+        conf_text = f"{confidence:.2%}" if confidence else "N/A"
+        self.result_table.setItem(row_count, 2, QTableWidgetItem(conf_text))
+        
+        time_text = f"{inference_time:.3f}s" if inference_time else "N/A"
+        self.result_table.setItem(row_count, 3, QTableWidgetItem(time_text))
+        
+        self.result_table.setItem(row_count, 4, QTableWidgetItem(timestamp))
+        
+        # 滚动到最新的行
+        self.result_table.scrollToBottom()
+    
+    def on_scan_status_changed(self, status):
+        """更新扫描状态信息"""
+        self.scan_status_label.setText(f"扫描状态: {status}")
+        # 保持标签为绿色（运行中）
+        if self.is_scanning:
+            self.scan_status_label.setStyleSheet("color: green;")
+    
+    def on_scan_error(self, error):
+        """扫描错误处理"""
+        self.scan_status_label.setText(f"扫描状态: 错误 - {error}")
+        self.scan_status_label.setStyleSheet("color: red;")
+        QMessageBox.critical(self, "扫描错误", f"持续扫描发生错误: {error}")
+
     def on_auto_infer_finished(self, results):
         """自动推理完成回调"""
         self.progress_bar.setVisible(False)
@@ -650,6 +874,13 @@ class InferenceUI(QMainWindow):
                 subprocess.Popen(['xdg-open', folder_path])
         except Exception as e:
             QMessageBox.critical(self, "错误", f"无法打开文件夹: {str(e)}")
+    
+    def closeEvent(self, event):
+        """窗口关闭事件处理"""
+        # 确保持续扫描被停止
+        if self.is_scanning:
+            self.stop_continuous_scan()
+        event.accept()
 
 
 def main():

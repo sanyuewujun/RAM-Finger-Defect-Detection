@@ -125,16 +125,16 @@ class InferenceUI(QMainWindow):
         # 模型选择
         config_layout.addWidget(QLabel("选择模型:"), 0, 0)
         self.model_combo = QComboBox()
-        self.model_combo.addItems(['Vit_B_16', 'resnet50'])
+        self.model_combo.addItems(['Swin_V2_B', 'resnet50'])
         self.model_combo.currentTextChanged.connect(self.on_model_changed)
         config_layout.addWidget(self.model_combo, 0, 1)
         
         # 图像大小
         config_layout.addWidget(QLabel("图像大小:"), 0, 2)
         self.size_spin = QSpinBox()
-        self.size_spin.setValue(224)
         self.size_spin.setMinimum(64)
         self.size_spin.setMaximum(512)
+        self.size_spin.setValue(224)
         config_layout.addWidget(self.size_spin, 0, 3)
         
         # 推理文件夹路径显示

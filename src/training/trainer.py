@@ -61,14 +61,14 @@ class TrainModel:
             self.best_lr = LR_CUSTOM_HEAD  # 记录学习率
             print(f"Successful!{self.model_name}学习率调度策略已设置。")
 
-        elif self.model_name == "Vit_B_16":
+        elif self.model_name == "Swin_V2_B":
             # 自定义优化器和学习率调度器
             LR_CUSTOM_HEAD = 1e-3  # 自定义分类头，可以稍高
             LR_LAST_BLOCK = 1e-4  # 解冻的最后一个 Transformer Block，非常低
             # 定义优化器参数组
             param_groups = [
                 {'params': model.head.parameters(), 'lr': LR_CUSTOM_HEAD, 'group_name': 'custom_head'},
-                {'params': model.encoder.layers[-1].parameters(), 'lr': LR_LAST_BLOCK, 'group_name': 'last_block_fine_tune'}
+                {'params': model.features[-1].parameters(), 'lr': LR_LAST_BLOCK, 'group_name': 'last_block_fine_tune'}
             ]
 
             optimizer = optim.AdamW(param_groups, weight_decay=1e-4)

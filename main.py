@@ -4,14 +4,14 @@ from tests.testmodel import TestModel
 
 # --- 运行模式 ---
 # 可选: 'train', 'test'
-MODE = 'train'
+MODE = 'test'
 
 # --- 模型配置 ---
-# 可选模型: 'resnet50','Vit_B_16'
-model_name = 'Vit_B_16'
+# 可选模型: 'resneXt101','Swin_V2_B'
+model_name = 'Swin_V2_B'
 
 # --- 数据集配置 ---
-IMAGE_SIZE = (224, 224)  # 图像尺寸(224,224): 'resnet50','Vit_B_16'
+IMAGE_SIZE = (224, 224)  # 图像尺寸(224,224): 'resnet50','Swin_V2_B'
 Aug = 0         # 是否启用数据增强 (1: 是, 0: 否)
 
 # --- 训练配置 ---

@@ -1,5 +1,5 @@
 import os
-from sklearn.metrics import roc_curve, auc, precision_recall_curve, f1_score, recall_score
+from sklearn.metrics import roc_curve, auc, precision_recall_curve, f1_score, recall_score, precision_score
 import matplotlib.pyplot as plt
 import numpy as np
 import csv  # 导入csv模块
@@ -11,12 +11,13 @@ class Metrics:
         self.label_map = {i: name for i, name in enumerate(self.class_names)} if self.class_names else {}
 
     def metrics(self, all_preds, all_labels, all_outputs, num_classes, running_loss, total, correct):
-        test_loss = running_loss / total
+        # accuracy computation (loss still computed if caller provides it, but not reported)
         test_acc = 100 * correct / total
 
-        # 计算多分类的recall和f1-score
-        recall = recall_score(all_labels, all_preds, average='macro')
-        f1 = f1_score(all_labels, all_preds, average='macro')
+        # 计算多分类的precision、recall和f1-score，并转换为百分比
+        precision = precision_score(all_labels, all_preds, average='macro') * 100
+        recall = recall_score(all_labels, all_preds, average='macro') * 100
+        f1 = f1_score(all_labels, all_preds, average='macro') * 100
 
         # 绘制ROC曲线和PR曲线
         all_outputs = np.concatenate(all_outputs, axis=0)
@@ -25,9 +26,9 @@ class Metrics:
         self.plot_pr_curve(all_outputs, all_labels, num_classes)
 
         print(f'Test Accuracy: {test_acc:.2f}%')
-        print(f'Test Loss: {test_loss:.4f}')
-        print(f'Recall: {recall:.2f}')
-        print(f'F1 Score: {f1:.2f}')
+        print(f'Precision: {precision:.2f}%')
+        print(f'Recall: {recall:.2f}%')
+        print(f'F1 Score: {f1:.2f}%')
 
         # 将指标保存到CSV文件
         save_dir = os.path.join(f'experiments/{self.model}', 'test_metrics')
@@ -37,11 +38,8 @@ class Metrics:
         # 写入CSV文件
         with open(save_path, mode='w', newline='') as file:
             writer = csv.writer(file)
-            writer.writerow(['Metric', 'Value'])  # 写入表头
-            writer.writerow(['Test Accuracy', f'{test_acc:.2f}%'])
-            writer.writerow(['Test Loss', f'{test_loss:.4f}'])
-            writer.writerow(['Recall', f'{recall:.2f}'])
-            writer.writerow(['F1 Score', f'{f1:.2f}'])
+            writer.writerow(['Model', 'Accuracy (%)', 'Precision (%)', 'Recall (%)', 'F1-Score (%)'])  # 写入表头
+            writer.writerow([self.model, f'{test_acc:.2f}%', f'{precision:.2f}%', f'{recall:.2f}%', f'{f1:.2f}%'])
         
         # 在所有文件操作完成后，显示所有绘图窗口
         plt.show()

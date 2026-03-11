@@ -2,7 +2,7 @@
 import torch
 import torch.nn as nn
 from torchvision.models import resnet50, ResNet50_Weights
-from torchvision.models import vit_b_16, ViT_B_16_Weights
+from torchvision.models import swin_v2_b, Swin_V2_B_Weights
 from src.data_loader.dataset import DataSet
 
 class ModelSelection:
@@ -15,10 +15,10 @@ class ModelSelection:
     def select_model(self, model_name):
         if model_name == "resnet50":
             return self.resnet50_model()
-        elif model_name == "Vit_B_16":
-            return self.Vit_B_16_model()
+        elif model_name == "Swin_V2_B":
+            return self.Swin_V2_B_model()
         else:
-            print(f"错误: 无效的模型名称 '{model_name}'。请选择 'ResNet50' 或 'Vit_B_16'。")
+            print(f"错误: 无效的模型名称 '{model_name}'。请选择 'ResNet50' 或 'Swin_V2_B'。")
 
     def resnet50_model(self):
         # 加载预训练的效果最好的resnet50权重版本
@@ -56,25 +56,24 @@ class ModelSelection:
 
         return model
 
-    def Vit_B_16_model(self):
-        # 使用效果最好的 ViT-B/16 预训练权重版本
-        model = vit_b_16(weights=ViT_B_16_Weights.DEFAULT)
+    def Swin_V2_B_model(self):
+        # 使用效果最好的 Swin V2 B 预训练权重版本
+        model = swin_v2_b(weights=Swin_V2_B_Weights.DEFAULT)
         # 冻结所有参数 (特征提取阶段)
         for param in model.parameters():
             param.requires_grad = False
         # 解冻最后一个 Block (索引 11) 的参数
-        for param in model.encoder.layers[-1].parameters():
-            param.requires_grad = True
+        for param in model.features[-1].parameters():
+            param.requires_grad = True # 或者你的其他操作
         print("注意：已解冻最后一个 Transformer 编码器块的参数。")
 
-        # 获取 ViT 分类头 (model.head) 的输入特征数
-        # 对于 ViT-B/16，这个值是 768
-        num_ftrs = 768
+        # 获取 Swin V2 B 分类头 (model.head) 的输入特征数
+        num_ftrs = model.head.in_features
 
         # 修改分类头 (model.head) 以适应你的分类任务
-        # ViT 的分类头就是模型在 `cls` token 上接的一个全连接层
+        # Swin V2 B 的分类头就是模型在 `cls` token 上接的一个全连接层
         model.head = nn.Sequential(
-            # 第一层从 ViT 的输出 (768) 开始
+            # 第一层从 Swin V2 B 的输出 (768) 开始
             nn.Linear(num_ftrs, 768),  # 注意：这里我们使用 2048 来匹配你 ResNet 示例中的结构
             nn.ReLU(),
             nn.Dropout(0.4),

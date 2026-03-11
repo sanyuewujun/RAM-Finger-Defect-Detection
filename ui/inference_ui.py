@@ -170,9 +170,9 @@ class InferenceUI(QMainWindow):
         inference_tab = self._create_inference_tab()
         tab_widget.addTab(inference_tab, "图片推理")
         
-        # 选项卡2: 批量推理
+        # 选项卡2: 批量推理记录
         batch_tab = self._create_batch_tab()
-        tab_widget.addTab(batch_tab, "批量推理结果")
+        tab_widget.addTab(batch_tab, "推理结果记录")
         
         # 选项卡3: 统计信息
         stats_tab = self._create_stats_tab()

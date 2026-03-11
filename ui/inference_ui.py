@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import cv2
 from datetime import datetime
+import time
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QFileDialog, QTableWidget, QTableWidgetItem,
@@ -17,11 +18,13 @@ from PyQt5.QtGui import QPixmap, QFont, QColor, QIcon
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QDir
 from PyQt5.QtChart import QChart, QChartView, QPieSeries, QPieSlice
 from PyQt5.QtGui import QPainter, QColor as QtColor
+import shutil
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.inference.inference_engine import InferenceEngine
+from src.utils.result_manager import ResultManager
 # 禁止albumentations的更新检查弹窗
 os.environ["ALBUMENTATIONS_DISABLE_UPDATE_CHECK"] = "1"
 
@@ -42,14 +45,67 @@ class InferenceWorker(QThread):
             total = len(self.image_paths)
             for idx, image_path in enumerate(self.image_paths):
                 try:
+                    start_time = time.time()
                     result = self.inference_engine.infer(image_path)
+                    elapsed = time.time() - start_time
                     result['image_path'] = str(image_path)
+                    result['inference_time'] = elapsed
+                    result['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     results.append(result)
                 except Exception as e:
                     results.append({
                         'image_path': str(image_path),
                         'error': str(e),
-                        'class': '错误'
+                        'class': '错误',
+                        'inference_time': 0,
+                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    })
+                
+                progress_percent = int((idx + 1) / total * 100)
+                self.progress.emit(progress_percent)
+            
+            self.finished.emit(results)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class AutoInferenceWorker(QThread):
+    """自动推理并移动图片的工作线程"""
+    progress = pyqtSignal(int)
+    finished = pyqtSignal(list)
+    error = pyqtSignal(str)
+    
+    def __init__(self, inference_engine, image_paths, ai_result_folder):
+        super().__init__()
+        self.inference_engine = inference_engine
+        self.image_paths = image_paths
+        self.ai_result_folder = ai_result_folder
+    
+    def run(self):
+        try:
+            results = []
+            total = len(self.image_paths)
+            for idx, image_path in enumerate(self.image_paths):
+                try:
+                    start_time = time.time()
+                    result = self.inference_engine.infer(image_path)
+                    elapsed = time.time() - start_time
+                    result['image_path'] = str(image_path)
+                    result['inference_time'] = elapsed
+                    result['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    results.append(result)
+                    # 根据分类移动图片
+                    cls = result.get('class', 'NG')
+                    dest_dir = Path(self.ai_result_folder) / cls
+                    dest_dir.mkdir(exist_ok=True, parents=True)
+                    shutil.move(str(image_path), str(dest_dir / Path(image_path).name))
+                except Exception as e:
+                    results.append({
+                        'image_path': str(image_path),
+                        'error': str(e),
+                        'class': '错误',
+                        'inference_time': 0,
+                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     })
                 
                 progress_percent = int((idx + 1) / total * 100)
@@ -67,19 +123,28 @@ class InferenceUI(QMainWindow):
         super().__init__()
         self.inference_engine = None
         self.current_results = []
+        self.all_results = []  # 保留所有历史推理结果
         self.inference_folder = Path("Inference")
         self.output_folder = Path("Inference/results")
+        self.ai_result_folder = Path("AIResult")
+        
+        # 初始化结果管理器
+        self.result_manager = ResultManager(str(self.output_folder))
         
         # 创建必要的文件夹
         self.inference_folder.mkdir(exist_ok=True)
         self.output_folder.mkdir(exist_ok=True)
+        # AIResult目录及子目录
+        self.ai_result_folder.mkdir(exist_ok=True)
+        (self.ai_result_folder / "OK").mkdir(exist_ok=True, parents=True)
+        (self.ai_result_folder / "NG").mkdir(exist_ok=True, parents=True)
         
         self.init_ui()
         self.load_inference_images()
     
     def init_ui(self):
         """初始化UI"""
-        self.setWindowTitle("深度学习模型推理工具")
+        self.setWindowTitle("金手指不良判断系统")
         self.setGeometry(100, 100, 1400, 900)
         
         # 设置字体
@@ -125,7 +190,7 @@ class InferenceUI(QMainWindow):
         # 模型选择
         config_layout.addWidget(QLabel("选择模型:"), 0, 0)
         self.model_combo = QComboBox()
-        self.model_combo.addItems(['Swin_V2_B', 'resnet50'])
+        self.model_combo.addItems(['Swin_V2_B', 'resneXt101(32x8d)'])
         self.model_combo.currentTextChanged.connect(self.on_model_changed)
         config_layout.addWidget(self.model_combo, 0, 1)
         
@@ -188,6 +253,11 @@ class InferenceUI(QMainWindow):
         batch_infer_btn.clicked.connect(self.batch_infer_all)
         left_layout.addWidget(batch_infer_btn)
         
+        # 自动推理并移动按钮
+        auto_infer_btn = QPushButton("自动推理并移动")
+        auto_infer_btn.clicked.connect(self.auto_infer_and_move)
+        left_layout.addWidget(auto_infer_btn)
+        
         left_widget = QWidget()
         left_widget.setLayout(left_layout)
         left_widget.setMaximumWidth(250)
@@ -243,12 +313,14 @@ class InferenceUI(QMainWindow):
         
         # 结果表格
         self.result_table = QTableWidget()
-        self.result_table.setColumnCount(4)
-        self.result_table.setHorizontalHeaderLabels(['图片名称', '预测类别', '置信度', '操作'])
+        # 5列: 图片名称、预测类别、置信度、耗时、完成时间
+        self.result_table.setColumnCount(5)
+        self.result_table.setHorizontalHeaderLabels(['图片名称', '预测类别', '置信度', '耗时', '完成时间'])
         self.result_table.setColumnWidth(0, 250)
         self.result_table.setColumnWidth(1, 100)
         self.result_table.setColumnWidth(2, 100)
         self.result_table.setColumnWidth(3, 100)
+        self.result_table.setColumnWidth(4, 150)
         layout.addWidget(self.result_table)
         
         # 导出结果按钮
@@ -275,10 +347,13 @@ class InferenceUI(QMainWindow):
         return tab
     
     def on_model_changed(self):
-        """模型变更回调"""
-        self.status_label.setText("状态: 模型已改变，需要重新初始化")
+        """模型变更回调，自动初始化新模型"""
+        self.status_label.setText("状态: 模型已改变，正在重新初始化...")
         self.status_label.setStyleSheet("color: orange;")
         self.inference_engine = None
+        # 尝试直接初始化新模型
+        # 使用定时器以便界面有机会刷新状态标签
+        QTimer.singleShot(100, self.init_model)
     
     def init_model(self):
         """初始化模型"""
@@ -398,11 +473,73 @@ class InferenceUI(QMainWindow):
         self.worker.finished.connect(self.on_batch_infer_finished)
         self.worker.error.connect(lambda e: QMessageBox.critical(self, "错误", f"批量推理失败: {e}"))
         self.worker.start()
+
+    def auto_infer_and_move(self):
+        """自动推理Inference目录中的所有图片并根据结果移动到AIResult/OK或NG"""
+        if self.inference_engine is None:
+            QMessageBox.warning(self, "警告", "请先初始化模型")
+            return
+        
+        # 获取所有图片路径
+        image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.JPG', '.JPEG', '.PNG'}
+        image_paths = [str(p) for p in self.inference_folder.iterdir() if p.suffix in image_extensions]
+        if not image_paths:
+            QMessageBox.warning(self, "警告", "Inference文件夹中没有图片可供推理")
+            return
+        
+        # 启动自动推理线程
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(0)
+        
+        self.worker = AutoInferenceWorker(self.inference_engine, image_paths, self.ai_result_folder)
+        self.worker.progress.connect(self.progress_bar.setValue)
+        self.worker.finished.connect(self.on_auto_infer_finished)
+        self.worker.error.connect(lambda e: QMessageBox.critical(self, "错误", f"自动推理失败: {e}"))
+        self.worker.start()
+
+    def on_auto_infer_finished(self, results):
+        """自动推理完成回调"""
+        self.progress_bar.setVisible(False)
+        self.current_results = results
+        
+        # 将结果添加到历史记录
+        self.result_manager.batch_add_results_to_history(results)
+        
+        # 更新批量结果表格，与批量推理一致
+        self.result_table.setRowCount(len(results))
+        for row, result in enumerate(results):
+            image_name = Path(result['image_path']).name
+            pred_class = result.get('class', '错误')
+            confidence = result.get('confidence', 0)
+            inference_time = result.get('inference_time', 0)
+            timestamp = result.get('timestamp', '')
+            
+            self.result_table.setItem(row, 0, QTableWidgetItem(image_name))
+            class_item = QTableWidgetItem(pred_class)
+            if pred_class != '错误':
+                if pred_class == 'OK':
+                    class_item.setBackground(QColor(144, 238, 144))
+                else:
+                    class_item.setBackground(QColor(255, 182, 193))
+            self.result_table.setItem(row, 1, class_item)
+            conf_text = f"{confidence:.2%}" if confidence else "N/A"
+            self.result_table.setItem(row, 2, QTableWidgetItem(conf_text))
+            time_text = f"{inference_time:.3f}s" if inference_time else "N/A"
+            self.result_table.setItem(row, 3, QTableWidgetItem(time_text))
+            self.result_table.setItem(row, 4, QTableWidgetItem(timestamp))
+        # 移动完成后刷新列表
+        self.load_inference_images()
+        # 更新统计信息
+        self.update_statistics()
+        QMessageBox.information(self, "完成", f"自动推理并移动完成，共处理 {len(results)} 张图片")
     
     def on_batch_infer_finished(self, results):
         """批量推理完成回调"""
         self.progress_bar.setVisible(False)
         self.current_results = results
+        
+        # 将结果添加到历史记录
+        self.result_manager.batch_add_results_to_history(results)
         
         # 更新结果表格
         self.result_table.setRowCount(len(results))
@@ -411,6 +548,8 @@ class InferenceUI(QMainWindow):
             image_name = Path(result['image_path']).name
             pred_class = result.get('class', '错误')
             confidence = result.get('confidence', 0)
+            inference_time = result.get('inference_time', 0)
+            timestamp = result.get('timestamp', '')
             
             # 图片名称
             self.result_table.setItem(row, 0, QTableWidgetItem(image_name))
@@ -428,10 +567,12 @@ class InferenceUI(QMainWindow):
             conf_text = f"{confidence:.2%}" if confidence else "N/A"
             self.result_table.setItem(row, 2, QTableWidgetItem(conf_text))
             
-            # 查看按钮
-            view_btn = QPushButton("查看")
-            view_btn.clicked.connect(lambda checked, path=result['image_path']: self.display_image_preview(path))
-            self.result_table.setCellWidget(row, 3, view_btn)
+            # 推理耗时
+            time_text = f"{inference_time:.3f}s" if inference_time else "N/A"
+            self.result_table.setItem(row, 3, QTableWidgetItem(time_text))
+            
+            # 完成时间
+            self.result_table.setItem(row, 4, QTableWidgetItem(timestamp))
         
         # 更新统计信息
         self.update_statistics()
@@ -443,30 +584,18 @@ class InferenceUI(QMainWindow):
         if not self.current_results:
             return
         
-        class_counts = {}
-        total_confidence = 0
-        valid_count = 0
-        
-        for result in self.current_results:
-            if 'class' in result and result['class'] != '错误':
-                class_name = result['class']
-                class_counts[class_name] = class_counts.get(class_name, 0) + 1
-                total_confidence += result.get('confidence', 0)
-                valid_count += 1
-        
-        stats_text = f"""
-推理统计信息:
-{'='*50}
-总推理图片数: {len(self.current_results)}
-成功推理: {valid_count}
-失败: {len(self.current_results) - valid_count}
-平均置信度: {total_confidence / valid_count:.2%}
-
-各类别统计:
-"""
-        for class_name, count in sorted(class_counts.items()):
-            percentage = count / valid_count * 100 if valid_count > 0 else 0
-            stats_text += f"  {class_name}: {count} ({percentage:.1f}%)\n"
+        # 从文件名自动提取真实标签（用于计算准确率）
+        try:
+            from tools.result_analyzer import ResultAnalyzer
+            true_labels = [
+                ResultAnalyzer.extract_true_label_from_filename(Path(r['image_path']).name)
+                for r in self.current_results
+            ]
+            # 使用结果管理器生成统计信息（包含准确率）
+            stats_text = self.result_manager.get_statistics_text(self.current_results, true_labels)
+        except (ImportError, AttributeError):
+            # 如果无法导入或提取标签，则显示不含准确率的统计信息
+            stats_text = self.result_manager.get_statistics_text(self.current_results)
         
         self.stats_text.setText(stats_text)
     
@@ -485,7 +614,7 @@ class InferenceUI(QMainWindow):
         result_filename = f"{self.output_folder}/{image_name.split('.')[0]}_result_{timestamp}.txt"
         
         try:
-            with open(result_filename, 'w', encoding='utf-8') as f:
+            with open(result_filename, 'w', encoding='utf-8-sig') as f:
                 f.write(f"图片: {image_name}\n")
                 f.write(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(self.result_text.toPlainText())
@@ -500,22 +629,10 @@ class InferenceUI(QMainWindow):
             QMessageBox.warning(self, "警告", "没有推理结果可导出")
             return
         
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        csv_filename = f"{self.output_folder}/inference_results_{timestamp}.csv"
-        
         try:
-            import csv
-            with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                writer.writerow(['图片名称', '预测类别', '置信度', '推理时间'])
-                
-                for result in self.current_results:
-                    image_name = Path(result['image_path']).name
-                    pred_class = result.get('class', 'N/A')
-                    confidence = result.get('confidence', 0)
-                    writer.writerow([image_name, pred_class, f"{confidence:.4f}"])
-            
-            QMessageBox.information(self, "成功", f"结果已导出: {csv_filename}")
+            # 使用结果管理器导出CSV
+            csv_path = self.result_manager.export_to_csv(self.current_results)
+            QMessageBox.information(self, "成功", f"结果已导出: {csv_path}")
         except Exception as e:
             QMessageBox.critical(self, "错误", f"导出失败: {str(e)}")
     

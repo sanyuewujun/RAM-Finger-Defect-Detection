@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import (
     QLabel, QPushButton, QFileDialog, QTableWidget, QTableWidgetItem,
     QScrollArea, QSplitter, QProgressBar, QMessageBox, QComboBox,
     QSpinBox, QGroupBox, QGridLayout, QListWidget, QListWidgetItem,
-    QTabWidget, QTextEdit
+    QTabWidget, QTextEdit, QLineEdit, QCheckBox
 )
 from PyQt5.QtGui import QPixmap, QFont, QColor, QIcon
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QDir, QFileSystemWatcher
@@ -25,6 +25,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.inference.inference_engine import InferenceEngine
 from src.utils.result_manager import ResultManager
+from src.training.trainer import TrainModel
+from tests.testmodel import TestModel
 # 禁止albumentations的更新检查弹窗
 os.environ["ALBUMENTATIONS_DISABLE_UPDATE_CHECK"] = "1"
 
@@ -147,8 +149,8 @@ class ContinuousAutoInferenceWorker(QThread):
                 try:
                     # 获取当前文件夹中的所有图片
                     current_images = {
-                        p for p in self.inference_folder.iterdir() 
-                        if p.suffix in image_extensions and p.is_file()
+                        p for p in self.inference_folder.rglob('*') 
+                        if p.suffix.lower() in image_extensions and p.is_file()
                     }
                     
                     # 找出新增的图片（未被处理过的）
@@ -216,6 +218,82 @@ class ContinuousAutoInferenceWorker(QThread):
             self.error.emit(f"持续扫描过程中出错: {str(e)}")
 
 
+class TrainWorker(QThread):
+    """训练工作线程"""
+    progress = pyqtSignal(str)  # 发送日志信息
+    finished = pyqtSignal()
+    error = pyqtSignal(str)
+    
+    def __init__(self, model_name, num_epochs, batch_size, image_size, aug):
+        super().__init__()
+        self.model_name = model_name
+        self.num_epochs = num_epochs
+        self.batch_size = batch_size
+        self.image_size = image_size
+        self.aug = aug
+    
+    def run(self):
+        try:
+            import io
+            import sys
+            from contextlib import redirect_stdout
+            
+            # 捕获stdout
+            f = io.StringIO()
+            with redirect_stdout(f):
+                trainer = TrainModel(self.num_epochs, self.model_name, self.batch_size, self.image_size, self.aug)
+                trainer.train()
+            
+            output = f.getvalue()
+            # 将输出按行发送
+            for line in output.split('\n'):
+                if line.strip():
+                    self.progress.emit(line.strip())
+            
+            self.progress.emit("训练完成")
+            self.finished.emit()
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class TestWorker(QThread):
+    """测试工作线程"""
+    progress = pyqtSignal(str)  # 发送日志信息
+    finished = pyqtSignal()
+    error = pyqtSignal(str)
+    
+    def __init__(self, model_name, checkpoint, image_size, batch_size, aug):
+        super().__init__()
+        self.model_name = model_name
+        self.checkpoint = checkpoint
+        self.image_size = image_size
+        self.batch_size = batch_size
+        self.aug = aug
+    
+    def run(self):
+        try:
+            import io
+            import sys
+            from contextlib import redirect_stdout
+            
+            # 捕获stdout
+            f = io.StringIO()
+            with redirect_stdout(f):
+                tester = TestModel(self.model_name, self.checkpoint, self.image_size, self.batch_size, self.aug)
+                tester.test_model()
+            
+            output = f.getvalue()
+            # 将输出按行发送
+            for line in output.split('\n'):
+                if line.strip():
+                    self.progress.emit(line.strip())
+            
+            self.progress.emit("测试完成")
+            self.finished.emit()
+        except Exception as e:
+            self.error.emit(str(e))
+
+
 class InferenceUI(QMainWindow):
     """推理UI主窗口"""
     
@@ -232,6 +310,10 @@ class InferenceUI(QMainWindow):
         self.continuous_worker = None
         self.is_scanning = False
         self.scan_results = []  # 持续扫描的结果列表
+        
+        # 训练和测试相关
+        self.train_worker = None
+        self.test_worker = None
         
         # 初始化结果管理器
         self.result_manager = ResultManager(str(self.output_folder))
@@ -253,9 +335,11 @@ class InferenceUI(QMainWindow):
         self.setGeometry(100, 100, 1400, 900)
         
         # 设置字体
-        font = QFont()
-        font.setPointSize(10)
+        font = QFont("宋体", 10, QFont.Bold)
         self.setFont(font)
+        
+        # 应用当前主题
+        self.apply_theme()
         
         # 创建中心widget
         central_widget = QWidget()
@@ -283,9 +367,120 @@ class InferenceUI(QMainWindow):
         stats_tab = self._create_stats_tab()
         tab_widget.addTab(stats_tab, "统计信息")
         
+        # 选项卡4: 训练和测试
+        train_test_tab = self._create_train_test_tab()
+        tab_widget.addTab(train_test_tab, "训练和测试")
+        
         main_layout.addWidget(tab_widget)
         
         central_widget.setLayout(main_layout)
+    
+    def apply_theme(self):
+        """应用固定样式"""
+        self.setStyleSheet("""
+        QMainWindow {
+            background-color: #ffffff;
+        }
+        QGroupBox {
+            font-weight: bold;
+            border: 2px solid #cccccc;
+            border-radius: 5px;
+            margin-top: 1ex;
+            padding-top: 10px;
+            color: #333333;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            left: 10px;
+            padding: 0 5px 0 5px;
+            color: #333333;
+        }
+        QPushButton {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        QPushButton:hover {
+            background-color: #45a049;
+        }
+        QPushButton:pressed {
+            background-color: #3e8e41;
+        }
+        QPushButton:disabled {
+            background-color: #cccccc;
+            color: #666666;
+        }
+        QComboBox {
+            border: 1px solid #cccccc;
+            border-radius: 3px;
+            padding: 5px;
+            background-color: white;
+            color: black;
+        }
+        QSpinBox {
+            border: 1px solid #cccccc;
+            border-radius: 3px;
+            padding: 5px;
+            background-color: white;
+            color: black;
+        }
+        QLineEdit {
+            border: 1px solid #cccccc;
+            border-radius: 3px;
+            padding: 5px;
+            background-color: white;
+            color: black;
+        }
+        QTextEdit {
+            border: 1px solid #cccccc;
+            border-radius: 3px;
+            background-color: #f9f9f9;
+            color: black;
+        }
+        QListWidget {
+            border: 1px solid #cccccc;
+            border-radius: 3px;
+            background-color: white;
+            color: black;
+        }
+        QTableWidget {
+            border: 1px solid #cccccc;
+            border-radius: 3px;
+            background-color: white;
+            color: black;
+            gridline-color: #cccccc;
+        }
+        QTableWidget::item {
+            padding: 5px;
+        }
+        QTabWidget::pane {
+            border: 1px solid #cccccc;
+            border-radius: 3px;
+        }
+        QTabBar::tab {
+            background-color: #f0f0f0;
+            border: 1px solid #cccccc;
+            padding: 8px 16px;
+            margin-right: 2px;
+            border-radius: 3px 3px 0 0;
+            color: black;
+        }
+        QTabBar::tab:selected {
+            background-color: white;
+            border-bottom: 2px solid #4CAF50;
+            color: black;
+        }
+        QTabBar::tab:hover {
+            background-color: #e0e0e0;
+            color: black;
+        }
+        QLabel {
+            color: black;
+        }
+        """)
     
     def _create_config_layout(self):
         """创建配置区域"""
@@ -331,10 +526,37 @@ class InferenceUI(QMainWindow):
         # 状态标签
         self.status_label = QLabel("状态: 未初始化")
         self.status_label.setStyleSheet("color: red;")
-        config_layout.addWidget(self.status_label, 2, 2, 1, 2)
+        config_layout.addWidget(self.status_label, 2, 3)
         
         config_group.setLayout(config_layout)
         return config_group
+    
+        # 2. 创建选项卡
+        tab_widget = QTabWidget()
+        
+        # 选项卡1: 图片推理
+        inference_tab = self._create_inference_tab()
+        tab_widget.addTab(inference_tab, "图片推理")
+        
+        # 选项卡2: 批量推理记录
+        batch_tab = self._create_batch_tab()
+        tab_widget.addTab(batch_tab, "推理结果记录")
+        
+        # 选项卡3: 统计信息
+        stats_tab = self._create_stats_tab()
+        tab_widget.addTab(stats_tab, "统计信息")
+        
+        # 选项卡4: 训练和测试
+        train_test_tab = self._create_train_test_tab()
+        tab_widget.addTab(train_test_tab, "训练和测试")
+        
+        main_layout.addWidget(tab_widget)
+        
+        central_widget.setLayout(main_layout)
+        
+        # 加载数据库结果
+        self.load_results_from_database()
+        self.update_stats()
     
     def _create_inference_tab(self):
         """创建推理选项卡"""
@@ -429,20 +651,34 @@ class InferenceUI(QMainWindow):
         
         # 结果表格
         self.result_table = QTableWidget()
-        # 5列: 图片名称、预测类别、置信度、耗时、完成时间
-        self.result_table.setColumnCount(5)
-        self.result_table.setHorizontalHeaderLabels(['图片名称', '预测类别', '置信度', '耗时', '完成时间'])
-        self.result_table.setColumnWidth(0, 250)
-        self.result_table.setColumnWidth(1, 100)
+        # 6列: ID、图片名称、AI判定结果、置信率、耗时、完成时间
+        self.result_table.setColumnCount(6)
+        self.result_table.setHorizontalHeaderLabels(['ID', '图片名称', 'AI判定结果', '置信率', '耗时', '完成时间'])
+        # 设置表头字体为Times New Roman
+        header_font = QFont("Times New Roman", 10)
+        self.result_table.horizontalHeader().setFont(header_font)
+        self.result_table.setColumnWidth(0, 50)
+        self.result_table.setColumnWidth(1, 200)
         self.result_table.setColumnWidth(2, 100)
         self.result_table.setColumnWidth(3, 100)
-        self.result_table.setColumnWidth(4, 150)
+        self.result_table.setColumnWidth(4, 100)
+        self.result_table.setColumnWidth(5, 150)
         layout.addWidget(self.result_table)
+        
+        # 按钮布局
+        button_layout = QHBoxLayout()
+        
+        # 刷新结果按钮
+        refresh_results_btn = QPushButton("刷新结果")
+        refresh_results_btn.clicked.connect(self.load_results_from_database)
+        button_layout.addWidget(refresh_results_btn)
         
         # 导出结果按钮
         export_btn = QPushButton("导出结果为CSV")
         export_btn.clicked.connect(self.export_results)
-        layout.addWidget(export_btn)
+        button_layout.addWidget(export_btn)
+        
+        layout.addLayout(button_layout)
         
         tab.setLayout(layout)
         return tab
@@ -458,6 +694,105 @@ class InferenceUI(QMainWindow):
         self.stats_text = QTextEdit()
         self.stats_text.setReadOnly(True)
         layout.addWidget(self.stats_text)
+        
+        tab.setLayout(layout)
+        return tab
+    
+    def _create_train_test_tab(self):
+        """创建训练和测试选项卡"""
+        tab = QWidget()
+        layout = QVBoxLayout()
+        
+        # 通用配置区域
+        common_group = QGroupBox("通用配置")
+        common_layout = QGridLayout()
+        
+        # 图像大小
+        common_layout.addWidget(QLabel("图像大小:"), 0, 0)
+        self.train_size_spin = QSpinBox()
+        self.train_size_spin.setMinimum(64)
+        self.train_size_spin.setMaximum(512)
+        self.train_size_spin.setValue(224)
+        common_layout.addWidget(self.train_size_spin, 0, 1)
+        
+        common_group.setLayout(common_layout)
+        layout.addWidget(common_group)
+        
+        # 训练和测试配置区域
+        train_test_layout = QHBoxLayout()
+        
+        # 训练配置
+        train_group = QGroupBox("训练配置")
+        train_layout = QGridLayout()
+        
+        # 训练模型选择
+        train_layout.addWidget(QLabel("选择模型:"), 0, 0)
+        self.train_model_combo_train = QComboBox()
+        self.train_model_combo_train.addItems(['Swin_V2_B', 'Swin_B', "ResNeXt50_32X4D",'resneXt101(32x8d)',"ResNeXt101_64X4D"])
+        train_layout.addWidget(self.train_model_combo_train, 0, 1)
+        
+        train_layout.addWidget(QLabel("训练轮次:"), 1, 0)
+        self.epochs_spin = QSpinBox()
+        self.epochs_spin.setMinimum(1)
+        self.epochs_spin.setMaximum(200)
+        self.epochs_spin.setValue(70)
+        train_layout.addWidget(self.epochs_spin, 1, 1)
+        
+        train_layout.addWidget(QLabel("批处理大小:"), 1, 2)
+        self.train_batch_spin = QSpinBox()
+        self.train_batch_spin.setMinimum(1)
+        self.train_batch_spin.setMaximum(64)
+        self.train_batch_spin.setValue(16)
+        train_layout.addWidget(self.train_batch_spin, 1, 3)
+        
+        self.train_btn = QPushButton("开始训练")
+        self.train_btn.clicked.connect(self.start_training)
+        train_layout.addWidget(self.train_btn, 2, 0, 1, 4)
+        
+        train_group.setLayout(train_layout)
+        train_test_layout.addWidget(train_group)
+        
+        # 测试配置
+        test_group = QGroupBox("测试配置")
+        test_layout = QGridLayout()
+        
+        # 测试模型选择
+        test_layout.addWidget(QLabel("选择模型:"), 0, 0)
+        self.train_model_combo_test = QComboBox()
+        self.train_model_combo_test.addItems(['Swin_V2_B', 'Swin_B', "ResNeXt50_32X4D",'resneXt101(32x8d)',"ResNeXt101_64X4D"])
+        self.train_model_combo_test.currentTextChanged.connect(self.on_test_model_changed)
+        test_layout.addWidget(self.train_model_combo_test, 0, 1)
+        
+        test_layout.addWidget(QLabel("批处理大小:"), 1, 0)
+        self.test_batch_spin = QSpinBox()
+        self.test_batch_spin.setMinimum(1)
+        self.test_batch_spin.setMaximum(64)
+        self.test_batch_spin.setValue(16)
+        test_layout.addWidget(self.test_batch_spin, 1, 1)
+        
+        test_layout.addWidget(QLabel("模型权重路径:"), 2, 0)
+        self.checkpoint_edit = QLineEdit()
+        self.checkpoint_edit.setText(f'experiments/{self.train_model_combo_test.currentText()}/checkpoints/best_{self.train_model_combo_test.currentText()}_model.pth')
+        test_layout.addWidget(self.checkpoint_edit, 2, 1, 1, 2)
+        
+        browse_btn = QPushButton("浏览...")
+        browse_btn.clicked.connect(self.browse_checkpoint)
+        test_layout.addWidget(browse_btn, 2, 3)
+        
+        self.test_btn = QPushButton("开始测试")
+        self.test_btn.clicked.connect(self.start_testing)
+        test_layout.addWidget(self.test_btn, 3, 0, 1, 4)
+        
+        test_group.setLayout(test_layout)
+        train_test_layout.addWidget(test_group)
+        
+        layout.addLayout(train_test_layout)
+        
+        # 日志区域
+        layout.addWidget(QLabel("日志:"))
+        self.train_test_log = QTextEdit()
+        self.train_test_log.setReadOnly(True)
+        layout.addWidget(self.train_test_log)
         
         tab.setLayout(layout)
         return tab
@@ -500,17 +835,19 @@ class InferenceUI(QMainWindow):
         """加载Inference文件夹中的图片"""
         self.image_list.clear()
         
-        if not self.inference_folder.exists():
-            self.inference_folder.mkdir(exist_ok=True)
+        image_paths = self._collect_inference_images()
         
-        image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.JPG', '.JPEG', '.PNG'}
-        image_paths = [p for p in self.inference_folder.iterdir() 
-                      if p.suffix in image_extensions]
-        
-        for image_path in sorted(image_paths):
-            item = QListWidgetItem(image_path.name)
+        for image_path in image_paths:
+            relative_name = image_path.relative_to(self.inference_folder)
+            item = QListWidgetItem(str(relative_name))
             item.setData(Qt.UserRole, str(image_path))
             self.image_list.addItem(item)
+        
+        # 自动显示第一张图片
+        if self.image_list.count() > 0:
+            first_item = self.image_list.item(0)
+            self.image_list.setCurrentItem(first_item)
+            self.on_image_selected(first_item)
         
         status = f"找到 {len(image_paths)} 张图片"
         if len(image_paths) == 0:
@@ -529,7 +866,18 @@ class InferenceUI(QMainWindow):
             self.image_preview.setPixmap(scaled_pixmap)
         except Exception as e:
             self.image_preview.setText(f"无法加载图片: {str(e)}")
-    
+
+    def _collect_inference_images(self):
+        """递归收集Inference文件夹中的所有图片"""
+        image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff'}
+        images = []
+        if not self.inference_folder.exists():
+            self.inference_folder.mkdir(exist_ok=True)
+        for p in self.inference_folder.rglob('*'):
+            if p.is_file() and p.suffix.lower() in image_extensions:
+                images.append(p)
+        return sorted(images)
+
     def infer_selected_image(self):
         """推理选中的图片"""
         if self.inference_engine is None:
@@ -595,10 +943,8 @@ class InferenceUI(QMainWindow):
         if self.inference_engine is None:
             QMessageBox.warning(self, "警告", "请先初始化模型")
             return
-        
-        # 获取所有图片路径
-        image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.JPG', '.JPEG', '.PNG'}
-        image_paths = [str(p) for p in self.inference_folder.iterdir() if p.suffix in image_extensions]
+
+        image_paths = [str(p) for p in self._collect_inference_images()]
         if not image_paths:
             QMessageBox.warning(self, "警告", "Inference文件夹中没有图片可供推理")
             return
@@ -875,18 +1221,218 @@ class InferenceUI(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "错误", f"无法打开文件夹: {str(e)}")
     
+    def on_train_model_changed(self):
+        """训练模型变更回调，更新checkpoint路径"""
+        model_name = self.train_model_combo.currentText()
+        default_checkpoint = f'experiments/{model_name}/checkpoints/best_{model_name}_model.pth'
+        self.checkpoint_edit.setText(default_checkpoint)
+    
+    def browse_checkpoint(self):
+        """浏览选择checkpoint文件"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "选择模型权重文件", "", "PyTorch模型文件 (*.pth);;所有文件 (*)"
+        )
+        if file_path:
+            self.checkpoint_edit.setText(file_path)
+    
+    def on_test_model_changed(self):
+        """测试模型变更回调，更新checkpoint路径"""
+        model_name = self.train_model_combo_test.currentText()
+        default_checkpoint = f'experiments/{model_name}/checkpoints/best_{model_name}_model.pth'
+        self.checkpoint_edit.setText(default_checkpoint)
+    
+    def start_training(self):
+        """开始训练"""
+        if self.train_worker is not None and self.train_worker.isRunning():
+            QMessageBox.warning(self, "警告", "训练正在进行中")
+            return
+        
+        model_name = self.train_model_combo_train.currentText()
+        image_size = (self.train_size_spin.value(), self.train_size_spin.value())
+        aug = 0  # 去除数据增强
+        num_epochs = self.epochs_spin.value()
+        batch_size = self.train_batch_spin.value()
+        
+        self.train_test_log.clear()
+        self.train_test_log.append(f"=== 开始训练模型: {model_name} ===")
+        self.train_test_log.append(f"图像大小: {image_size}")
+        self.train_test_log.append(f"训练轮次: {num_epochs}")
+        self.train_test_log.append(f"批处理大小: {batch_size}")
+        self.train_test_log.append("-" * 50)
+        
+        self.train_btn.setEnabled(False)
+        self.test_btn.setEnabled(False)
+        
+        self.train_worker = TrainWorker(model_name, num_epochs, batch_size, image_size, aug)
+        self.train_worker.progress.connect(self.on_train_progress)
+        self.train_worker.finished.connect(self.on_train_finished)
+        self.train_worker.error.connect(self.on_train_error)
+        self.train_worker.start()
+    
+    def start_testing(self):
+        """开始测试"""
+        if self.test_worker is not None and self.test_worker.isRunning():
+            QMessageBox.warning(self, "警告", "测试正在进行中")
+            return
+        
+        model_name = self.train_model_combo_test.currentText()
+        checkpoint = self.checkpoint_edit.text()
+        image_size = (self.train_size_spin.value(), self.train_size_spin.value())
+        aug = 0  # 去除数据增强
+        batch_size = self.test_batch_spin.value()
+        
+        if not os.path.exists(checkpoint):
+            QMessageBox.warning(self, "警告", f"模型权重文件不存在: {checkpoint}")
+            return
+        
+        self.train_test_log.clear()
+        self.train_test_log.append(f"=== 开始测试模型: {model_name} ===")
+        self.train_test_log.append(f"权重文件: {checkpoint}")
+        self.train_test_log.append(f"图像大小: {image_size}")
+        self.train_test_log.append(f"批处理大小: {batch_size}")
+        self.train_test_log.append("-" * 50)
+        
+        self.train_btn.setEnabled(False)
+        self.test_btn.setEnabled(False)
+        
+        self.test_worker = TestWorker(model_name, checkpoint, image_size, batch_size, aug)
+        self.test_worker.progress.connect(self.on_test_progress)
+        self.test_worker.finished.connect(self.on_test_finished)
+        self.test_worker.error.connect(self.on_test_error)
+        self.test_worker.start()
+    
+    def on_train_progress(self, message):
+        """训练进度回调"""
+        self.train_test_log.append(message)
+        # 滚动到底部
+        cursor = self.train_test_log.textCursor()
+        cursor.movePosition(cursor.End)
+        self.train_test_log.setTextCursor(cursor)
+    
+    def on_train_finished(self):
+        """训练完成回调"""
+        self.train_test_log.append("训练完成！")
+        self.train_btn.setEnabled(True)
+        self.test_btn.setEnabled(True)
+        QMessageBox.information(self, "完成", "模型训练已完成！")
+    
+    def on_train_error(self, error):
+        """训练错误回调"""
+        self.train_test_log.append(f"训练错误: {error}")
+        self.train_btn.setEnabled(True)
+        self.test_btn.setEnabled(True)
+        QMessageBox.critical(self, "训练错误", f"训练过程中发生错误: {error}")
+    
+    def on_test_progress(self, message):
+        """测试进度回调"""
+        self.train_test_log.append(message)
+        # 滚动到底部
+        cursor = self.train_test_log.textCursor()
+        cursor.movePosition(cursor.End)
+        self.train_test_log.setTextCursor(cursor)
+    
+    def on_test_finished(self):
+        """测试完成回调"""
+        self.train_test_log.append("测试完成！")
+        self.train_btn.setEnabled(True)
+        self.test_btn.setEnabled(True)
+        QMessageBox.information(self, "完成", "模型测试已完成！")
+    
+    def on_test_error(self, error):
+        """测试错误回调"""
+        self.train_test_log.append(f"测试错误: {error}")
+        self.train_btn.setEnabled(True)
+        self.test_btn.setEnabled(True)
+        QMessageBox.critical(self, "测试错误", f"测试过程中发生错误: {error}")
+    
+    def load_results_from_database(self):
+        """从数据库加载推理结果并显示在表格中"""
+        try:
+            results = self.result_manager.load_results_from_database()
+            
+            self.result_table.setRowCount(len(results))
+            
+            for row, result in enumerate(results):
+                # ID
+                self.result_table.setItem(row, 0, QTableWidgetItem(str(result['id'])))
+                # 图片名称
+                self.result_table.setItem(row, 1, QTableWidgetItem(result['image_name']))
+                # 预测类别
+                self.result_table.setItem(row, 2, QTableWidgetItem(result['class']))
+                # 置信度
+                confidence = result['confidence']
+                if confidence is not None:
+                    self.result_table.setItem(row, 3, QTableWidgetItem(f"{confidence:.4f}"))
+                else:
+                    self.result_table.setItem(row, 3, QTableWidgetItem("N/A"))
+                # 耗时
+                inference_time = result['inference_time']
+                if inference_time is not None:
+                    self.result_table.setItem(row, 4, QTableWidgetItem(f"{inference_time:.4f}s"))
+                else:
+                    self.result_table.setItem(row, 4, QTableWidgetItem("N/A"))
+                # 完成时间
+                self.result_table.setItem(row, 5, QTableWidgetItem(result['timestamp']))
+            
+            # 更新统计信息
+            self.update_stats()
+            
+        except Exception as e:
+            QMessageBox.warning(self, "加载错误", f"从数据库加载结果失败: {str(e)}")
+    
+    def update_stats(self):
+        """更新统计信息"""
+        try:
+            stats = self.result_manager.get_database_stats()
+            
+            stats_text = f"""数据库统计信息:
+
+总记录数: {stats['total_records']}
+
+类别分布:
+"""
+            for class_name, count in stats['class_distribution'].items():
+                stats_text += f"{class_name}: {count}\n"
+            
+            stats_text += f"\n平均置信度: {stats['average_confidence']:.4f}"
+            
+            self.stats_text.setPlainText(stats_text)
+            
+        except Exception as e:
+            self.stats_text.setPlainText(f"获取统计信息失败: {str(e)}")
+    
     def closeEvent(self, event):
         """窗口关闭事件处理"""
         # 确保持续扫描被停止
         if self.is_scanning:
             self.stop_continuous_scan()
+        
+        # 停止训练和测试线程
+        if self.train_worker is not None and self.train_worker.isRunning():
+            self.train_worker.terminate()
+            self.train_worker.wait()
+        
+        if self.test_worker is not None and self.test_worker.isRunning():
+            self.test_worker.terminate()
+            self.test_worker.wait()
+        
         event.accept()
 
 
 def main():
+    """主函数 - 启动PyQt5推理UI应用"""
     app = QApplication(sys.argv)
+    
+    # 设置应用程序信息
+    app.setApplicationName("深度学习推理系统")
+    app.setApplicationVersion("1.0")
+    app.setOrganizationName("AI Lab")
+    
+    # 创建主窗口
     window = InferenceUI()
     window.show()
+    
+    # 运行应用程序
     sys.exit(app.exec_())
 
 

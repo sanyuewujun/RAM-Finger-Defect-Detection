@@ -9,5 +9,6 @@ AIResult/
 *.png
 *.csv
 *.json
-
+*.pth
+*.db
 

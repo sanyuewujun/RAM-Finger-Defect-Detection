@@ -40,7 +40,7 @@ class TrainModel:
 
         # 定义损失函数,使用CrossEntropyloss时可以不在nn末层中添加激活函数
         criterion = nn.BCEWithLogitsLoss() if self.num_classes == 1 else nn.CrossEntropyLoss()
-        if self.model_name == "resnet50":
+        if self.model_name == "resneXt101(32x8d)":
             # 自定义优化器和学习率调度器
             LR_CUSTOM_HEAD = 1e-4  # 自定义隐藏层
             LR_LAYER4 = 1e-5  # 解冻的 layer4
@@ -49,22 +49,89 @@ class TrainModel:
                 {'params': model.fc.parameters(), 'lr': LR_CUSTOM_HEAD, 'group_name': 'custom_head'},
                 {'params': model.layer4.parameters(), 'lr': LR_LAYER4, 'group_name': 'layer4_fine_tune'}
             ]
-            optimizer = optim.Adam(param_groups, weight_decay=1e-4)
+            optimizer = optim.AdamW(param_groups, weight_decay=1e-4)
             steps_per_epoch = len(train_loader)
             # 定义学习率调度器
             scheduler = OneCycleLR(
                 optimizer,
                 max_lr=[LR_CUSTOM_HEAD, LR_LAYER4],
                 steps_per_epoch=steps_per_epoch,
-                epochs=self.num_epochs
+                epochs=self.num_epochs,
+                pct_start=0.1
+            )
+            self.best_lr = LR_CUSTOM_HEAD  # 记录学习率
+            print(f"Successful!{self.model_name}学习率调度策略已设置。")
+            
+        elif self.model_name == "ResNeXt50_32X4D":
+            # 自定义优化器和学习率调度器
+            LR_CUSTOM_HEAD = 1e-4  # 自定义隐藏层
+            LR_LAYER4 = 1e-5  # 解冻的 layer4
+            # 定义优化器参数组
+            param_groups = [
+                {'params': model.fc.parameters(), 'lr': LR_CUSTOM_HEAD, 'group_name': 'custom_head'},
+                {'params': model.layer4.parameters(), 'lr': LR_LAYER4, 'group_name': 'layer4_fine_tune'}
+            ]
+            optimizer = optim.AdamW(param_groups, weight_decay=1e-4)
+            steps_per_epoch = len(train_loader)
+            # 定义学习率调度器
+            scheduler = OneCycleLR(
+                optimizer,
+                max_lr=[LR_CUSTOM_HEAD, LR_LAYER4],
+                steps_per_epoch=steps_per_epoch,
+                epochs=self.num_epochs,
+                pct_start=0.1
+            )
+            self.best_lr = LR_CUSTOM_HEAD  # 记录学习率
+            print(f"Successful!{self.model_name}学习率调度策略已设置。")
+            
+        elif self.model_name == "ResNeXt101_64X4D":
+            # 自定义优化器和学习率调度器
+            LR_CUSTOM_HEAD = 1e-4  # 自定义隐藏层
+            LR_LAYER4 = 1e-5  # 解冻的 layer4
+            # 定义优化器参数组
+            param_groups = [
+                {'params': model.fc.parameters(), 'lr': LR_CUSTOM_HEAD, 'group_name': 'custom_head'},
+                {'params': model.layer4.parameters(), 'lr': LR_LAYER4, 'group_name': 'layer4_fine_tune'}
+            ]
+            optimizer = optim.AdamW(param_groups, weight_decay=1e-4)
+            steps_per_epoch = len(train_loader)
+            # 定义学习率调度器
+            scheduler = OneCycleLR(
+                optimizer,
+                max_lr=[LR_CUSTOM_HEAD, LR_LAYER4],
+                steps_per_epoch=steps_per_epoch,
+                epochs=self.num_epochs,
+                pct_start=0.1
+            )
+            self.best_lr = LR_CUSTOM_HEAD  # 记录学习率
+            print(f"Successful!{self.model_name}学习率调度策略已设置。")
+            
+        elif self.model_name == "Swin_B":
+            # 自定义优化器和学习率调度器
+            LR_CUSTOM_HEAD = 1e-4  # 自定义分类头，可以稍高
+            LR_LAST_BLOCK = 1e-5  # 解冻的最后一个 Transformer Block，非常低
+            # 定义优化器参数组
+            param_groups = [
+                {'params': model.head.parameters(), 'lr': LR_CUSTOM_HEAD, 'group_name': 'custom_head'},
+                {'params': model.features[-1].parameters(), 'lr': LR_LAST_BLOCK, 'group_name': 'last_block_fine_tune'}
+            ]
+            optimizer = optim.AdamW(param_groups, weight_decay=1e-4)
+            steps_per_epoch = len(train_loader)
+            # 定义学习率调度器
+            scheduler = OneCycleLR(
+                optimizer,
+                max_lr=[LR_CUSTOM_HEAD, LR_LAST_BLOCK],
+                steps_per_epoch=steps_per_epoch,
+                epochs=self.num_epochs,
+                pct_start=0.1
             )
             self.best_lr = LR_CUSTOM_HEAD  # 记录学习率
             print(f"Successful!{self.model_name}学习率调度策略已设置。")
 
         elif self.model_name == "Swin_V2_B":
             # 自定义优化器和学习率调度器
-            LR_CUSTOM_HEAD = 1e-3  # 自定义分类头，可以稍高
-            LR_LAST_BLOCK = 1e-4  # 解冻的最后一个 Transformer Block，非常低
+            LR_CUSTOM_HEAD = 1e-4  # 自定义分类头，可以稍高
+            LR_LAST_BLOCK = 1e-5  # 解冻的最后一个 Transformer Block，非常低
             # 定义优化器参数组
             param_groups = [
                 {'params': model.head.parameters(), 'lr': LR_CUSTOM_HEAD, 'group_name': 'custom_head'},
@@ -78,7 +145,8 @@ class TrainModel:
                 optimizer,
                 max_lr=[LR_CUSTOM_HEAD, LR_LAST_BLOCK],
                 steps_per_epoch=steps_per_epoch,
-                epochs=self.num_epochs
+                epochs=self.num_epochs,
+                pct_start=0.1
             )
             self.best_lr = LR_CUSTOM_HEAD  # 记录学习率
             print(f"Successful!{self.model_name}学习率调度策略已设置。")
@@ -143,7 +211,7 @@ class TrainModel:
             print(f'Validation Loss: {val_epoch_loss:.4f}, Validation Accuracy: {val_accuracy:.4f}')
 
             # 使用策略 1 检查是否达到预设的最低损失阈值
-            if self.strategy_one(val_epoch_loss):
+            if self.strategy_one(val_epoch_loss, model):
                 break
 
             # 使用策略 2 标准的基于 patience 的早停
@@ -163,7 +231,7 @@ class TrainModel:
         # 保存最佳模型的信息
         self.save_best_model_info()
 
-    def strategy_one(self, val_epoch_loss):
+    def strategy_one(self, val_epoch_loss, model):
         if val_epoch_loss <= self.BEST_LOSS_THRESHOLD:
             print(f"\n✨ 验证损失 {val_epoch_loss:.4f} 达到或低于阈值 {self.BEST_LOSS_THRESHOLD}，停止训练。")
             torch.save(model.state_dict(), f"experiments/{self.model_name}/checkpoints/best_{self.model_name}_model_threshold_reached.pth")

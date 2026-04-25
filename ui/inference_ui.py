@@ -295,7 +295,7 @@ class InferenceUI(QMainWindow):
         # 模型选择
         config_layout.addWidget(QLabel("选择模型:"), 0, 0)
         self.model_combo = QComboBox()
-        self.model_combo.addItems(['Swin_V2_B', 'resneXt101(32x8d)'])
+        self.model_combo.addItems(['Swin_V2_B', 'Swin_B', "ResNeXt50_32X4D",'resneXt101(32x8d)',"ResNeXt101_64X4D"])
         self.model_combo.currentTextChanged.connect(self.on_model_changed)
         config_layout.addWidget(self.model_combo, 0, 1)
         

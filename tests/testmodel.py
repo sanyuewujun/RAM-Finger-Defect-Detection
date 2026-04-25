@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import os
-from torchvision import models
 from src.models.models import ModelSelection
 from src.data_loader.dataset import DataSet
 from src.utils.metrics import Metrics
@@ -20,7 +19,7 @@ class TestModel:
         model = model_selector.select_model(self.model_name)
 
         # 加载检查点文件中的权重
-        model.load_state_dict(torch.load(self.checkpoint))
+        model.load_state_dict(torch.load(self.checkpoint, weights_only=True))
         model.eval()
 
         # 创建数据集加载器

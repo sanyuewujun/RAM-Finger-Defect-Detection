@@ -30,13 +30,6 @@ class DataSet:
         if self.Aug:
             self.transform = A.Compose([
                 A.Resize(height=self.IMAGE_SIZE[0], width=self.IMAGE_SIZE[1], p=1.0),
-                A.OneOf([
-                    A.Rotate(limit=0, p=0.25),
-                    A.Rotate(limit=90, p=0.25),
-                    A.Rotate(limit=180, p=0.25),
-                    A.Rotate(limit=270, p=0.25),
-                ], p=1.0),
-                A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=1.0),
                 A.HorizontalFlip(p=0.5),
                 A.VerticalFlip(p=0.5),
                 A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], p=1.0),
@@ -145,7 +138,7 @@ class DataSet:
             augmented_images.append(transformed_image)
         return TensorDataset(torch.stack(augmented_images), torch.tensor(labels))
 
-    def data_loader(self, batch_size):
+    def data_loader(self,batch_size):
         # 创建 DataLoader
         train_dataset = self.paths_to_dataset(self.train_image_paths, self.train_labels)
         val_dataset = self.paths_to_dataset(self.val_image_paths, self.val_labels)

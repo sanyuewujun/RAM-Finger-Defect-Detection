@@ -1,17 +1,16 @@
-import os
 from src.training.trainer import TrainModel
 from tests.testmodel import TestModel
 
 # --- 运行模式 ---
 # 可选: 'train', 'test'
-MODE = 'test'
+MODE = 'test'  
 
 # --- 模型配置 ---
-# 可选模型: 'resneXt101','Swin_V2_B'
+# 可选模型: "ResNeXt50_32X4D","resneXt101(32x8d)", "ResNeXt101_64X4D", "Swin_V2_B", "Swin_B"
 model_name = 'Swin_V2_B'
 
 # --- 数据集配置 ---
-IMAGE_SIZE = (224, 224)  # 图像尺寸(224,224): 'resnet50','Swin_V2_B'
+IMAGE_SIZE = (224, 224)  # 输入图像的尺寸 (宽, 高)
 Aug = 0         # 是否启用数据增强 (1: 是, 0: 否)
 
 # --- 训练配置 ---

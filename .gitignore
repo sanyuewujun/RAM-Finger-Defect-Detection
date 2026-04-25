@@ -1,6 +1,13 @@
 __pycache__/
+data\
+AIResult/
 *.py[cod]
 *.pyo
 *.jpg
-data/
-logs/
+*.pyc
+*.jpg
+*.png
+*.csv
+*.json
+
+

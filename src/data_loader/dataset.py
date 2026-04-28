@@ -132,7 +132,7 @@ class DataSet:
     def paths_to_dataset(self, image_paths, labels):
         augmented_images = []
         for image_path in image_paths:
-            image = cv2.imread(image_path)
+            image = cv2.imdecode(np.fromfile(image_path, dtype=np.uint8), cv2.IMREAD_COLOR)
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             transformed_image = self.transform(image=image)["image"]
             augmented_images.append(transformed_image)

@@ -3,6 +3,9 @@ from sklearn.metrics import roc_curve, auc, precision_recall_curve, f1_score, re
 import matplotlib.pyplot as plt
 import numpy as np
 import csv  # 导入csv模块
+import matplotlib
+matplotlib.use('Agg')  # 必须在导入 pyplot 之前设置
+import matplotlib.pyplot as plt
 
 class Metrics:
     def __init__(self, model, class_names=None):

@@ -1,6 +1,3 @@
-"""
-推理引擎 - 用于加载模型并进行单张图片推理
-"""
 import torch
 import torch.nn as nn
 import os

@@ -12,11 +12,10 @@ from PyQt5.QtWidgets import (
     QLabel, QPushButton, QFileDialog, QTableWidget, QTableWidgetItem,
     QScrollArea, QSplitter, QProgressBar, QMessageBox, QComboBox,
     QSpinBox, QGroupBox, QGridLayout, QListWidget, QListWidgetItem,
-    QTabWidget, QTextEdit, QLineEdit, QCheckBox
+    QTabWidget, QTextEdit, QLineEdit, QCheckBox, QHeaderView  # <--- 新增 QHeaderView
 )
 from PyQt5.QtGui import QPixmap, QFont, QColor, QIcon
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QDir, QFileSystemWatcher
-from PyQt5.QtChart import QChart, QChartView, QPieSeries, QPieSlice
 from PyQt5.QtGui import QPainter, QColor as QtColor
 import shutil
 
@@ -29,6 +28,26 @@ from src.training.trainer import TrainModel
 from tests.testmodel import TestModel
 # 禁止albumentations的更新检查弹窗
 os.environ["ALBUMENTATIONS_DISABLE_UPDATE_CHECK"] = "1"
+
+class StdoutRedirector:
+    """将标准输出行转发到PyQt信号。"""
+    def __init__(self, progress_signal):
+        self.progress_signal = progress_signal
+        self.buffer = ""
+
+    def write(self, text):
+        if not text:
+            return
+        self.buffer += text
+        while "\n" in self.buffer:
+            line, self.buffer = self.buffer.split("\n", 1)
+            if line.strip():
+                self.progress_signal.emit(line.strip())
+
+    def flush(self):
+        if self.buffer.strip():
+            self.progress_signal.emit(self.buffer.strip())
+            self.buffer = ""
 
 class InferenceWorker(QThread):
     """推理工作线程"""
@@ -234,22 +253,17 @@ class TrainWorker(QThread):
     
     def run(self):
         try:
-            import io
             import sys
-            from contextlib import redirect_stdout
-            
-            # 捕获stdout
-            f = io.StringIO()
-            with redirect_stdout(f):
+
+            original_stdout = sys.stdout
+            sys.stdout = StdoutRedirector(self.progress)
+            try:
                 trainer = TrainModel(self.num_epochs, self.model_name, self.batch_size, self.image_size, self.aug)
                 trainer.train()
-            
-            output = f.getvalue()
-            # 将输出按行发送
-            for line in output.split('\n'):
-                if line.strip():
-                    self.progress.emit(line.strip())
-            
+            finally:
+                sys.stdout.flush()
+                sys.stdout = original_stdout
+
             self.progress.emit("训练完成")
             self.finished.emit()
         except Exception as e:
@@ -272,22 +286,17 @@ class TestWorker(QThread):
     
     def run(self):
         try:
-            import io
             import sys
-            from contextlib import redirect_stdout
-            
-            # 捕获stdout
-            f = io.StringIO()
-            with redirect_stdout(f):
+
+            original_stdout = sys.stdout
+            sys.stdout = StdoutRedirector(self.progress)
+            try:
                 tester = TestModel(self.model_name, self.checkpoint, self.image_size, self.batch_size, self.aug)
                 tester.test_model()
-            
-            output = f.getvalue()
-            # 将输出按行发送
-            for line in output.split('\n'):
-                if line.strip():
-                    self.progress.emit(line.strip())
-            
+            finally:
+                sys.stdout.flush()
+                sys.stdout = original_stdout
+
             self.progress.emit("测试完成")
             self.finished.emit()
         except Exception as e:
@@ -359,13 +368,13 @@ class InferenceUI(QMainWindow):
         inference_tab = self._create_inference_tab()
         tab_widget.addTab(inference_tab, "图片推理")
         
-        # 选项卡2: 批量推理记录
-        batch_tab = self._create_batch_tab()
-        tab_widget.addTab(batch_tab, "推理结果记录")
-        
-        # 选项卡3: 统计信息
+        # 选项卡2: 统计信息
         stats_tab = self._create_stats_tab()
         tab_widget.addTab(stats_tab, "统计信息")
+        
+        # 选项卡3: 批量推理记录
+        batch_tab = self._create_batch_tab()
+        tab_widget.addTab(batch_tab, "推理结果记录")
         
         # 选项卡4: 训练和测试
         train_test_tab = self._create_train_test_tab()
@@ -374,6 +383,8 @@ class InferenceUI(QMainWindow):
         main_layout.addWidget(tab_widget)
         
         central_widget.setLayout(main_layout)
+        
+        self.update_statistics() # 正确写法：初始状态会显示“暂无推理数据”
     
     def apply_theme(self):
         """应用固定样式"""
@@ -554,9 +565,7 @@ class InferenceUI(QMainWindow):
         
         central_widget.setLayout(main_layout)
         
-        # 加载数据库结果
-        self.load_results_from_database()
-        self.update_stats()
+
     
     def _create_inference_tab(self):
         """创建推理选项卡"""
@@ -613,15 +622,17 @@ class InferenceUI(QMainWindow):
         
         # 推理结果
         right_layout.addWidget(QLabel("推理结果:"))
-        self.result_text = QTextEdit()
-        self.result_text.setReadOnly(True)
-        self.result_text.setMinimumHeight(200)
-        right_layout.addWidget(self.result_text)
+        self.single_result_table = QTableWidget()
+        self.single_result_table.setColumnCount(2)
+        self.single_result_table.setHorizontalHeaderLabels(['类别 (Class)', '概率 (Probability)'])
         
-        # 保存结果按钮
-        save_btn = QPushButton("保存结果")
-        save_btn.clicked.connect(self.save_result)
-        right_layout.addWidget(save_btn)
+        # 核心：设置自适应窗口大小
+        self.single_result_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.single_result_table.verticalHeader().setVisible(False) # 隐藏左侧默认行号
+        self.single_result_table.setMinimumHeight(200)
+        self.single_result_table.setEditTriggers(QTableWidget.NoEditTriggers) # 禁止编辑
+        
+        right_layout.addWidget(self.single_result_table)
         
         # 添加进度条
         self.progress_bar = QProgressBar()
@@ -896,21 +907,48 @@ class InferenceUI(QMainWindow):
             
         except Exception as e:
             QMessageBox.critical(self, "错误", f"推理失败: {str(e)}")
+        if result not in self.current_results:
+            self.current_results.append(result)
+        self.update_statistics()
     
     def display_inference_result(self, result):
-        """显示推理结果"""
-        result_text = f"""
-推理结果:
-{'='*50}
-预测类别: {result['class']}
-置信度: {result['confidence']:.2%}
-
-各类别概率:
-"""
-        for class_name, prob in result['probabilities'].items():
-            result_text += f"  {class_name}: {prob:.2%}\n"
+        """显示单张推理结果到表格"""
+        probs = result.get('probabilities', {})
+        pred_class = result.get('class', '未知')
         
-        self.result_text.setText(result_text)
+        # 清空旧数据并设置行数
+        self.single_result_table.setRowCount(len(probs))
+        
+        for row, (class_name, prob) in enumerate(probs.items()):
+            class_item = QTableWidgetItem(str(class_name))
+            prob_item = QTableWidgetItem(f"{prob:.2%}")
+            
+            # 文本居中
+            class_item.setTextAlignment(Qt.AlignCenter)
+            prob_item.setTextAlignment(Qt.AlignCenter)
+            
+            # 高亮最终预测的类别
+            if class_name == pred_class:
+                highlight_color = QColor(144, 238, 144) # 浅绿色
+                class_item.setBackground(highlight_color)
+                prob_item.setBackground(highlight_color)
+                
+                # 加粗
+                font = QFont()
+                font.setBold(True)
+                class_item.setFont(font)
+                prob_item.setFont(font)
+            
+            self.single_result_table.setItem(row, 0, class_item)
+            self.single_result_table.setItem(row, 1, prob_item)
+            
+        # 在后台缓存一份文本记录，用于后续的“保存结果”功能
+        self._current_single_result_text = (
+            f"预测类别: {pred_class}\n"
+            f"置信度: {result.get('confidence', 0):.2%}\n\n"
+            f"各类别概率:\n"
+            + "\n".join([f"  {c}: {p:.2%}" for c, p in probs.items()])
+        )
     
     def batch_infer_all(self):
         """批量推理所有图片"""
@@ -1020,8 +1058,9 @@ class InferenceUI(QMainWindow):
             )
     
     def on_continuous_result(self, result):
-        """处理持续扫描的单个结果"""
-        self.scan_results.append(result)
+        """持续扫描单个结果"""
+        self.all_results.append(result)  # 累加到本次运行记录
+        self.update_statistics()         # 执行统计更新
         
         # 更新结果表格
         row_count = self.result_table.rowCount()
@@ -1104,9 +1143,9 @@ class InferenceUI(QMainWindow):
         QMessageBox.information(self, "完成", f"自动推理并移动完成，共处理 {len(results)} 张图片")
     
     def on_batch_infer_finished(self, results):
-        """批量推理完成回调"""
-        self.progress_bar.setVisible(False)
-        self.current_results = results
+        """批量推理完成"""
+        self.all_results.extend(results) # 累加到本次运行记录
+        self.update_statistics()         # 执行统计更新
         
         # 将结果添加到历史记录
         self.result_manager.batch_add_results_to_history(results)
@@ -1144,34 +1183,50 @@ class InferenceUI(QMainWindow):
             # 完成时间
             self.result_table.setItem(row, 4, QTableWidgetItem(timestamp))
         
-        # 更新统计信息
-        self.update_statistics()
+        self.current_results = results  # 更新内存列表
+        self.update_statistics()        # 刷新统计界面
         
         QMessageBox.information(self, "成功", f"批量推理完成！共推理 {len(results)} 张图片")
     
     def update_statistics(self):
-        """更新统计信息"""
+        """更新统计信息：仅针对本次运行的 current_results"""
         if not self.current_results:
+            self.stats_text.setText("本次运行暂无推理数据。")
             return
         
-        # 从文件名自动提取真实标签（用于计算准确率）
-        try:
-            from tools.result_analyzer import ResultAnalyzer
-            true_labels = [
-                ResultAnalyzer.extract_true_label_from_filename(Path(r['image_path']).name)
-                for r in self.current_results
-            ]
-            # 使用结果管理器生成统计信息（包含准确率）
-            stats_text = self.result_manager.get_statistics_text(self.current_results, true_labels)
-        except (ImportError, AttributeError):
-            # 如果无法导入或提取标签，则显示不含准确率的统计信息
-            stats_text = self.result_manager.get_statistics_text(self.current_results)
+        total = len(self.current_results)
+        class_counts = {}
+        total_conf = 0
         
-        self.stats_text.setText(stats_text)
-    
+        # 遍历本次运行的所有结果
+        for res in self.current_results:
+            cls = res.get('class', '未知')
+            class_counts[cls] = class_counts.get(cls, 0) + 1
+            total_conf += res.get('confidence', 0)
+        
+        avg_conf = total_conf / total if total > 0 else 0
+        
+        # 格式化输出文本
+        stats_output = [
+            "📊 本次运行推理统计",
+            "=" * 30,
+            f"总处理数量: {total}",
+            "\n[类别分布]:"
+        ]
+        
+        for cls, count in class_counts.items():
+            percentage = (count / total) * 100
+            stats_output.append(f" - {cls}: {count} 张 ({percentage:.1f}%)")
+            
+        stats_output.append(f"\n平均置信度: {avg_conf:.2%}")
+        stats_output.append(f"统计更新时间: {datetime.now().strftime('%H:%M:%S')}")
+        
+        self.stats_text.setText("\n".join(stats_output))
+        
     def save_result(self):
         """保存单张图片的推理结果"""
-        if not self.result_text.toPlainText():
+        # 判断是否存在缓存结果
+        if not hasattr(self, '_current_single_result_text') or not self._current_single_result_text:
             QMessageBox.warning(self, "警告", "没有推理结果可保存")
             return
         
@@ -1187,7 +1242,7 @@ class InferenceUI(QMainWindow):
             with open(result_filename, 'w', encoding='utf-8-sig') as f:
                 f.write(f"图片: {image_name}\n")
                 f.write(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(self.result_text.toPlainText())
+                f.write(self._current_single_result_text)  # 读取后台缓存数据
             
             QMessageBox.information(self, "成功", f"结果已保存: {result_filename}")
         except Exception as e:

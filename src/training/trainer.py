@@ -9,7 +9,6 @@ from torch.optim.lr_scheduler import OneCycleLR
 import csv  # 添加csv库以处理CSV文件
 import matplotlib
 matplotlib.use('Agg')  # 必须在导入 pyplot 之前设置
-import matplotlib.pyplot as plt
 
 class TrainModel:
     def __init__(self, num_epochs, model_name, batch_size, IMAGE_SIZE, Aug, patience=50, BEST_LOSS_THRESHOLD=0.0001, num_classes=2):

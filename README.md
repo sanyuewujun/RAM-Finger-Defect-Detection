@@ -20,6 +20,7 @@ DeepLearning/
 ├── main.py                    # 主入口：训练/测试模式切换
 ├── inference_app.py          # GUI推理应用启动入口
 ├── cli_inference.py          # 命令行推理工具
+├── mysql_config.py           # MySQL数据库配置
 ├── system_introduction.md    # 系统介绍文档（答辩用）
 │
 ├── src/                      # 核心源代码
@@ -73,6 +74,8 @@ DeepLearning/
 - Albumentations
 - scikit-learn
 - matplotlib
+- pandas (可选，用于历史记录分析)
+- pymysql (可选，用于MySQL数据库支持)
 
 ### 安装依赖
 
@@ -85,11 +88,11 @@ pip install torch torchvision opencv-python albumentations PyQt5 scikit-learn ma
 ```python
 # main.py 配置
 MODE = 'train'                          # 运行模式
-cmodel_name = 'Swin_V2_B'               # 选择模型
+model_name = 'Swin_V2_B'                # 选择模型
 num_epochs = 100                        # 训练轮次
 batch_size = 16                         # 批处理大小
 IMAGE_SIZE = (224, 224)                 # 图像尺寸
-Aug = 0                                 # 数据增强开关
+Aug = 0                                 # 数据增强开关 (0: 关闭, 1: 开启)
 
 # 运行训练
 python main.py
@@ -120,7 +123,7 @@ python inference_app.py
 python cli_inference.py image.jpg --model Swin_V2_B
 
 # 批量推理
-python cli_inference.py ./images/ --model ResNeXt50_32X4D
+python cli_inference.py ./images/ --model Swin_V2_B
 
 # 导出结果
 python cli_inference.py image.jpg --output result.json
@@ -131,7 +134,7 @@ python cli_inference.py image.jpg --output result.json
 | 模型 | 类型 | 特点 |
 |------|------|------|
 | **ResNeXt50_32X4D** | CNN | 分组卷积，平衡精度与速度 |
-| **ResNeXt101_32X8d** | CNN | 更深的网络，特征提取能力强 |
+| **resneXt101(32x8d)** | CNN | 更深的网络，特征提取能力强 |
 | **ResNeXt101_64X4D** | CNN | 更宽的网络，并行计算优化 |
 | **Swin_B** | Transformer | 移动窗口机制，层次化特征 |
 | **Swin_V2_B** | Transformer | Swin V2优化版本，训练更稳定 |
@@ -193,6 +196,19 @@ scheduler = OneCycleLR(
 # 双重早停策略
 1. 损失阈值策略：验证损失 ≤ 0.0001 时停止
 2. Patience策略：连续50个epoch无改善时停止
+```
+
+### 数据增强
+
+```python
+# Aug = 1 时启用数据增强
+transform = A.Compose([
+    A.Resize(height=IMAGE_SIZE[0], width=IMAGE_SIZE[1], p=1.0),
+    A.HorizontalFlip(p=0.5),
+    A.VerticalFlip(p=0.5),
+    A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], p=1.0),
+    ToTensorV2()
+])
 ```
 
 ## 🖥️ GUI功能介绍
@@ -264,6 +280,19 @@ scheduler = OneCycleLR(
 2. **MySQL数据库**：支持远程数据库连接
 3. **CSV文件**：`Inference/results/inference_history.csv`
 
+### MySQL配置
+
+在 `mysql_config.py` 中配置数据库连接：
+
+```python
+MYSQL_CONFIG = {
+    'host': '127.0.0.1',    # MySQL服务器地址
+    'port': 3306,           # MySQL端口号
+    'user': 'root',         # 数据库用户名
+    'password': '123456',   # 数据库密码
+}
+```
+
 ### 结果管理器功能
 
 ```python
@@ -322,6 +351,16 @@ continuous_worker.start()
 cls = result.get('class', 'NG')
 dest_dir = Path(ai_result_folder) / cls
 shutil.move(str(image_path), str(dest_dir / image_path.name))
+```
+
+### 结果分析工具
+
+```bash
+# 分析历史记录并计算精度指标
+python tools/result_analyzer.py --history Inference/results/inference_history.csv --analyze
+
+# 自动从文件名提取真实标签并更新历史记录
+python tools/result_analyzer.py --history Inference/results/inference_history.csv --update-labels
 ```
 
 ## 📁 数据目录结构
@@ -464,13 +503,52 @@ tester.test_model()  # 输出测试指标和曲线图
 - [ ] 主动学习策略，智能选择待标注样本
 - [ ] 模型集成（Ensemble）提升鲁棒性
 
-## 👥 贡献指南
+## 👥 版本控制与开发规范
 
-1. Fork本仓库
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 创建Pull Request
+本项目使用 Git 进行版本管理，仓库地址：https://github.com/sanyuewujun/DeepLearning.git
+
+### 开发工作流
+
+```bash
+# 1. 拉取最新代码
+git pull origin master
+
+# 2. 创建功能分支（建议命名规范）
+git checkout -b feature/功能描述
+git checkout -b fix/修复描述
+git checkout -b experiment/实验描述
+
+# 3. 开发完成后提交更改
+git add .
+git commit -m "feat: 添加新功能描述"
+git commit -m "fix: 修复问题描述"
+git commit -m "docs: 更新文档说明"
+
+# 4. 推送到远程仓库
+git push origin 分支名
+
+# 5. 合并到主分支
+git checkout master
+git merge 分支名
+```
+
+### 提交信息规范
+
+| 前缀 | 说明 | 示例 |
+|------|------|------|
+| `feat:` | 新功能 | `feat: 添加模型量化支持` |
+| `fix:` | 修复Bug | `fix: 修正推理引擎内存泄漏` |
+| `docs:` | 文档更新 | `docs: 更新README使用说明` |
+| `refactor:` | 代码重构 | `refactor: 优化数据加载器性能` |
+| `test:` | 测试相关 | `test: 添加单元测试用例` |
+| `chore:` | 构建/工具 | `chore: 更新依赖版本` |
+
+### 注意事项
+
+- **数据文件**：训练图片、模型权重等大文件请勿直接提交到 Git 仓库
+- **配置文件**：敏感信息（如数据库密码）请使用本地配置文件，避免泄露
+- **实验记录**：不同模型的实验结果建议按 `experiments/模型名/` 目录组织
+- **代码风格**：遵循 PEP 8 规范，保持代码注释完整
 
 ## 📄 许可证
 
